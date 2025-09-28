@@ -22,6 +22,85 @@ from clean_datasets import (
 
 st.set_page_config(page_title="Churn + SHAP", layout="wide", initial_sidebar_state="collapsed")
 
+# --- NAVBAR COMPONENT ---
+def navbar(active: str):
+    # 1) Build the row first (brand | spacer | 5 links)
+    c_brand, c_spacer, c1, c2, c3, c4, c5 = st.columns([1.4, 5.8, 1.25, 1.9, 1.6, 1.25, 1.6])
+
+    with c_brand:
+        st.markdown(
+            '<div class="qr-brand"><span class="qr-cube"></span><span>QuickRetain</span></div>',
+            unsafe_allow_html=True
+        )
+    with c1: st.page_link("app.py", label="Features")
+    with c2: st.page_link("pages/01_Churn_SHAP.py", label="Churn + SHAP")
+    with c3: st.page_link("pages/02_Retention_RL.py", label="Retention RL")
+    with c4: st.page_link("pages/03_Logistics.py", label="Logistics")
+    with c5: st.page_link("pages/04_Campaigns.py", label="🎯 Campaigns")
+
+    # 2) Style the row that contains .qr-brand AS the sticky navbar
+    st.markdown(f"""
+    <style>
+      /* make the columns row that contains .qr-brand the sticky glass navbar */
+      div[data-testid="stHorizontalBlock"]:has(.qr-brand) {{
+        position: sticky; top: 0; z-index: 9999;
+        background: rgba(255,255,255,.92);
+        backdrop-filter: saturate(170%) blur(12px);
+        border-bottom: 1px solid rgba(20,16,50,.06);
+        box-shadow: 0 8px 24px rgba(20,16,50,.06);
+        padding: 14px 18px;
+        margin-top: -8px; /* tight to top */
+      }}
+      /* tighten inner cols so the bar looks flush */
+      div[data-testid="stHorizontalBlock"]:has(.qr-brand) > div {{
+        padding-top: 0 !important;
+      }}
+
+      /* brand */
+      .qr-brand {{ display:flex; align-items:center; gap:10px;
+                  font-weight:800; font-size:1.15rem; color:#121826; }}
+      .qr-cube {{ width:18px; height:18px; border-radius:4px;
+                 background: linear-gradient(135deg,#7C4DFF,#6C3BE2);
+                 box-shadow: 0 2px 8px rgba(98,56,226,.35); display:inline-block; }}
+
+      /* pill styling for ALL page links */
+      a[data-testid="stPageLink"] {{
+        display:inline-flex; align-items:center; gap:.4rem;
+        padding:10px 16px !important;
+        border-radius:999px !important;
+        text-decoration:none !important;
+        border:1px solid rgba(20,16,50,.12) !important;
+        background: rgba(255,255,255,.78) !important;
+        box-shadow: 0 4px 12px rgba(20,16,50,.06) !important;
+        color:#121826 !important; font-weight:600 !important;
+        white-space: nowrap !important;
+        transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
+      }}
+      a[data-testid="stPageLink"]:hover {{
+        transform: translateY(-1px);
+        border-color: rgba(102,52,226,.45) !important;
+        box-shadow: 0 8px 18px rgba(20,16,50,.10) !important;
+      }}
+
+      /* active page glow */
+      a[data-testid="stPageLink"][href$="{active}"] {{
+        background: linear-gradient(180deg,#fff,#F5F4FF) !important;
+        border-color: rgba(102,52,226,.65) !important;
+        box-shadow: 0 10px 22px rgba(102,52,226,.18) !important;
+      }}
+
+      /* mobile wrap nicely */
+      @media (max-width: 820px){{
+        div[data-testid="stHorizontalBlock"]:has(.qr-brand) {{
+          padding: 10px 12px;
+        }}
+      }}
+    </style>
+    """, unsafe_allow_html=True)
+
+# Use the navbar on the churn page
+navbar(active="pages/01_Churn_SHAP.py")
+
 # ---------- Helpers for alignment / safety ----------
 def get_expected_columns_from_preprocessor(preprocessor) -> List[str]:
     """
