@@ -1,0 +1,8 @@
+# System packages required for QuickRetain AI deployment
+# These are installed via apt-get on Linux systems (like Streamlit Cloud)
+
+python3-tk
+libcairo2-dev
+libpango1.0-dev
+libgdk-pixbuf2.0-dev
+libffi-dev
