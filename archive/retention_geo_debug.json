@@ -1,0 +1,26 @@
+{
+  "found_lat_column": "productname",
+  "found_lon_column": "brand",
+  "lat_min_max": [
+    0.0023640661938534,
+    28.65
+  ],
+  "lon_min_max": [
+    0.0,
+    77.2
+  ],
+  "sample_lat_values": [
+    28.65,
+    28.65,
+    28.65,
+    28.65,
+    28.65
+  ],
+  "sample_lon_values": [
+    77.2,
+    77.2,
+    77.2,
+    77.2,
+    77.2
+  ]
+}
