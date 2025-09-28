@@ -595,13 +595,29 @@ else:
 st.markdown("---")
 
 # ============ ORIGINAL DEMO DATA ============
+# Safety check: ensure df_all exists
+if df_all is None or len(df_all) == 0:
+    st.error("❌ No data available. Please check your data loading.")
+    st.stop()
+
 df_all = _apply_scope(df_all, SCOPE)
 st.caption(f"{len(df_all):,} rows in scope → {SCOPE} · baseline repeat={df_all['repeat_purchase'].mean():.3f}")
 
 # OPTIMIZATION: Add performance mode control
 c1, c2, c3, c4 = st.columns(4)
 with c1:
-    max_events = st.slider("Max events to use", 100, min(20000, len(df_all)), min(500, len(df_all)), step=50)  # Reduced default
+    # Fix slider bounds to prevent min_value > max_value error
+    data_len = len(df_all) if df_all is not None and len(df_all) > 0 else 1000
+    min_events = 100
+    max_events_limit = min(20000, data_len)
+    default_events = min(500, data_len)
+    
+    # Ensure min_value < max_value
+    if min_events >= max_events_limit:
+        max_events_limit = min_events + 100
+        default_events = min_events
+    
+    max_events = st.slider("Max events to use", min_events, max_events_limit, default_events, step=50)
 with c2:
     eps = st.slider("ε (exploration)", 0.0, 1.0, 0.20, 0.05)
 with c3:
