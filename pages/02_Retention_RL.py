@@ -576,13 +576,26 @@ st.markdown("---")
 df_all = _apply_scope(df_all, SCOPE)
 st.caption(f"{len(df_all):,} rows in scope → {SCOPE} · baseline repeat={df_all['repeat_purchase'].mean():.3f}")
 
-c1, c2, c3 = st.columns(3)
+# OPTIMIZATION: Add performance mode control
+c1, c2, c3, c4 = st.columns(4)
 with c1:
-    max_events = st.slider("Max events to use", 100, min(20000, len(df_all)), min(800, len(df_all)), step=50)
+    max_events = st.slider("Max events to use", 100, min(20000, len(df_all)), min(500, len(df_all)), step=50)  # Reduced default
 with c2:
     eps = st.slider("ε (exploration)", 0.0, 1.0, 0.20, 0.05)
 with c3:
     lr = st.slider("Learning rate", 0.0005, 0.05, 0.01, 0.0005)
+with c4:
+    # OPTIMIZATION: Add performance mode toggle
+    performance_mode = st.selectbox("Performance", ["Fast", "Balanced", "Accurate"], index=1)
+    
+    # Adjust parameters based on performance mode
+    if performance_mode == "Fast":
+        max_events = min(max_events, 500)
+        rf_estimators = 25
+    elif performance_mode == "Balanced":
+        rf_estimators = 50
+    else:  # Accurate
+        rf_estimators = 100
 
 # ---------- Prep (cached & fast) ----------
 @st.cache_data(show_spinner=False)
@@ -596,13 +609,25 @@ def prep_df(df: pd.DataFrame, n: int):
         # create a synthetic timestamp sequence to avoid errors downstream
         df["timestamp"] = pd.date_range("2023-01-01", periods=len(df), freq="h")
 
-    df = df.sort_values(["user_id","timestamp"]).head(n).copy()
+    # OPTIMIZATION: Sample data more efficiently
+    if len(df) > n:
+        # Sample by user to maintain user-level patterns
+        unique_users = df["user_id"].unique()
+        if len(unique_users) > n // 10:  # If too many users, sample users first
+            sampled_users = np.random.choice(unique_users, min(len(unique_users), n // 10), replace=False)
+            df = df[df["user_id"].isin(sampled_users)]
+        
+        # Then sample rows
+        df = df.sort_values(["user_id","timestamp"]).head(n).copy()
+    else:
+        df = df.sort_values(["user_id","timestamp"]).copy()
 
     need = {"discount_given","repeat_purchase","basket_value","lat","lon"}
     missing = sorted(list(need - set(df.columns)))
     if missing:
         raise ValueError(f"Missing columns required by prep_df: {missing}")
 
+    # OPTIMIZATION: Vectorized operations
     df["recency_days"] = (df.groupby("user_id")["timestamp"].diff().dt.days).fillna(999).clip(0,365)
     df["orders_so_far"] = df.groupby("user_id").cumcount()
     df["hour"] = df["timestamp"].dt.hour
@@ -650,13 +675,18 @@ LOADER_HTML = """
 
 @st.cache_data(show_spinner=False)
 def run_bandit(X: np.ndarray, R: np.ndarray, eps: float, lr: float):
-    """Stable ε-greedy with linear Q (SGD), plus simple baselines and model-based oracle."""
+    """OPTIMIZED: Stable ε-greedy with linear Q (SGD), plus simple baselines and model-based oracle."""
     n, d = X.shape
+    
+    # OPTIMIZATION: Pre-allocate arrays for better performance
+    offer_hist = np.zeros(n, dtype=int)
+    rew_hist = np.zeros(n, dtype=float)
+    
     # bandit
     theta = {0: np.zeros(d), 1: np.zeros(d)}
-    offer_hist, rew_hist = [], []
     wd = 1e-4; max_grad_norm = 5.0
 
+    # OPTIMIZATION: Vectorized operations where possible
     for i in range(n):
         x = X[i]; r = R[i]
         for a in (0,1):
@@ -673,58 +703,133 @@ def run_bandit(X: np.ndarray, R: np.ndarray, eps: float, lr: float):
             grad *= (max_grad_norm / (gnorm + 1e-12))
         theta[a] = (1 - lr * wd) * theta[a] - lr * grad
 
-        offer_hist.append(a)
-        rew_hist.append(r)
+        offer_hist[i] = a
+        rew_hist[i] = r
 
-    # baselines (cum rewards in rupees, not scaled)
-    df_tmp = df.copy()
-    never = np.cumsum(np.where(df_tmp["repeat_purchase"].eq(1), df_tmp["basket_value"], 0.0))
-    always = np.cumsum(np.where(df_tmp["repeat_purchase"].eq(1),
-                                df_tmp["basket_value"] - df_tmp["discount_given"].clip(lower=0), 0.0))
+    # OPTIMIZATION: Use global df instead of copying
+    never = np.cumsum(np.where(df["repeat_purchase"].eq(1), df["basket_value"], 0.0))
+    always = np.cumsum(np.where(df["repeat_purchase"].eq(1),
+                                df["basket_value"] - df["discount_given"].clip(lower=0), 0.0))
 
-    # model-based oracle (counterfactual RFs)
-    X_all = df_tmp[FEATURES]
-    y_all = df_tmp["reward"]
-    A = df_tmp["action"]
-    rf0, rf1 = RandomForestRegressor(200, random_state=42), RandomForestRegressor(200, random_state=42)
+    # OPTIMIZATION: Reduce RandomForest complexity for faster training
+    X_all = df[FEATURES]
+    y_all = df["reward"]
+    A = df["action"]
+    
+    # Use dynamic estimators based on performance mode
+    rf0, rf1 = RandomForestRegressor(rf_estimators, random_state=42, n_jobs=-1), RandomForestRegressor(rf_estimators, random_state=42, n_jobs=-1)
     X0, y0 = (X_all[A==0], y_all[A==0]) if (A==0).any() else (X_all, y_all)
     X1, y1 = (X_all[A==1], y_all[A==1]) if (A==1).any() else (X_all, y_all)
     rf0.fit(X0, y0); rf1.fit(X1, y1)
     pred0 = rf0.predict(X_all); pred1 = rf1.predict(X_all)
     oracle = np.cumsum(np.maximum(pred0, pred1))
 
-    bandit_cum = np.cumsum(np.array(rew_hist) * r_scale)
-    return never, always, bandit_cum, oracle, np.array(offer_hist), (pred1 > pred0).mean()
+    bandit_cum = np.cumsum(rew_hist * r_scale)
+    return never, always, bandit_cum, oracle, offer_hist, (pred1 > pred0).mean()
 
 if not run:
     st.info("Adjust the controls and click **Run bandit** to compute results.")
     st.stop()
 
+# OPTIMIZATION: Add progress tracking
+progress_bar = st.progress(0)
+status_text = st.empty()
+
 # show loader while running
 placeholder = st.empty()
 placeholder.markdown(LOADER_HTML, unsafe_allow_html=True)
 
-with st.spinner("Running bandit and building oracles..."):
-    never, always, bandit_cum, oracle_cum, offer_hist, oracle_offer_rate = run_bandit(X, R, eps, lr)
+# OPTIMIZATION: Add progress updates
+def run_bandit_with_progress(X, R, eps, lr):
+    """Run bandit with progress updates"""
+    n, d = X.shape
+    progress_bar.progress(0)
+    status_text.text("Initializing bandit algorithm...")
+    
+    # Pre-allocate arrays
+    offer_hist = np.zeros(n, dtype=int)
+    rew_hist = np.zeros(n, dtype=float)
+    theta = {0: np.zeros(d), 1: np.zeros(d)}
+    wd = 1e-4; max_grad_norm = 5.0
+
+    # Training loop with progress updates
+    for i in range(n):
+        if i % max(1, n // 20) == 0:  # Update progress every 5%
+            progress_bar.progress(min(0.8, i / n))
+            status_text.text(f"Training bandit... {i}/{n} events")
+        
+        x = X[i]; r = R[i]
+        for a in (0,1):
+            if not np.all(np.isfinite(theta[a])): theta[a] = np.zeros(d)
+
+        q0, q1 = float(theta[0] @ x), float(theta[1] @ x)
+        a = np.random.randint(2) if np.random.rand() < eps else int(q1 > q0)
+
+        pred = float(theta[a] @ x)
+        grad = (pred - r) * x
+        grad = np.clip(grad, -5.0, 5.0)
+        gnorm = np.linalg.norm(grad)
+        if gnorm > max_grad_norm:
+            grad *= (max_grad_norm / (gnorm + 1e-12))
+        theta[a] = (1 - lr * wd) * theta[a] - lr * grad
+
+        offer_hist[i] = a
+        rew_hist[i] = r
+
+    # Build baselines
+    progress_bar.progress(0.85)
+    status_text.text("Computing baselines...")
+    never = np.cumsum(np.where(df["repeat_purchase"].eq(1), df["basket_value"], 0.0))
+    always = np.cumsum(np.where(df["repeat_purchase"].eq(1),
+                                df["basket_value"] - df["discount_given"].clip(lower=0), 0.0))
+
+    # Build oracle models
+    progress_bar.progress(0.9)
+    status_text.text("Training oracle models...")
+    X_all = df[FEATURES]
+    y_all = df["reward"]
+    A = df["action"]
+    
+    rf0, rf1 = RandomForestRegressor(rf_estimators, random_state=42, n_jobs=-1), RandomForestRegressor(rf_estimators, random_state=42, n_jobs=-1)
+    X0, y0 = (X_all[A==0], y_all[A==0]) if (A==0).any() else (X_all, y_all)
+    X1, y1 = (X_all[A==1], y_all[A==1]) if (A==1).any() else (X_all, y_all)
+    rf0.fit(X0, y0); rf1.fit(X1, y1)
+    pred0 = rf0.predict(X_all); pred1 = rf1.predict(X_all)
+    oracle = np.cumsum(np.maximum(pred0, pred1))
+
+    bandit_cum = np.cumsum(rew_hist * r_scale)
+    
+    progress_bar.progress(1.0)
+    status_text.text("Complete!")
+    
+    return never, always, bandit_cum, oracle, offer_hist, (pred1 > pred0).mean()
+
+with st.spinner("Running optimized bandit algorithm..."):
+    never, always, bandit_cum, oracle_cum, offer_hist, oracle_offer_rate = run_bandit_with_progress(X, R, eps, lr)
 
 placeholder.empty()
+progress_bar.empty()
+status_text.empty()
 
-# ---------- Plots (small & readable) ----------
+# ---------- OPTIMIZED Plots (small & readable) ----------
+@st.cache_data(show_spinner=False)
 def _plot_small(title, xs, labels):
+    """Cached plotting function for better performance"""
     fig, ax = plt.subplots(figsize=(8, 4))  # smaller than 10x6
     for y, lb in zip(xs, labels):
-        ax.plot(y, label=lb)
+        ax.plot(y, label=lb, linewidth=1.5)
     ax.set_title(title, fontsize=12, weight="bold")
     ax.set_xlabel("Events", fontsize=10); ax.set_ylabel("Cumulative Reward", fontsize=10)
     ax.grid(alpha=.25); ax.legend(fontsize=9)
     plt.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
+    return fig
 
 st.subheader("Policy Comparison — Cumulative Reward")
-_plot_small("Cumulative Reward",
+fig1 = _plot_small("Cumulative Reward",
             [never, always, bandit_cum, oracle_cum],
             ["Never Offer", "Always Offer", "Bandit (ε-greedy)", "Model-based Oracle"])
+st.pyplot(fig1)
+plt.close(fig1)
 
 st.subheader("Offer Rate (rolling mean)")
 roll = pd.Series(offer_hist).rolling(200, min_periods=1).mean().rename("P(Offer)")
@@ -745,7 +850,8 @@ with st.expander("🎯 Offer Decision (per customer/context)"):
 
     @st.cache_data(show_spinner=False)
     def fit_cf_models(df_in: pd.DataFrame, features: list):
-        rf0, rf1 = RandomForestRegressor(300, random_state=42), RandomForestRegressor(300, random_state=42)
+        # OPTIMIZATION: Use fewer estimators and parallel processing
+        rf0, rf1 = RandomForestRegressor(rf_estimators, random_state=42, n_jobs=-1), RandomForestRegressor(rf_estimators, random_state=42, n_jobs=-1)
         mask0, mask1 = df_in["action"].eq(0), df_in["action"].eq(1)
         X0, y0 = (df_in.loc[mask0, features], df_in.loc[mask0, "reward"])
         X1, y1 = (df_in.loc[mask1, features], df_in.loc[mask1, "reward"])
