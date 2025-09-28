@@ -259,13 +259,82 @@ if df_raw is not None:
         except Exception:
             df_all["repeat_purchase"] = np.random.choice([0, 1], size=len(df_all), p=[0.7, 0.3])
 
-    # lat/lon (if missing add safe defaults near a central city)
-    df_all["lat"] = pd.to_numeric(df_raw[col_lat], errors="coerce")
-    df_all["lon"] = pd.to_numeric(df_raw[col_lon], errors="coerce")
-    if df_all["lat"].isna().all() or df_all["lon"].isna().all():
-        # fallback coordinates (approx Delhi)
-        df_all["lat"] = df_all["lat"].fillna(28.65)
-        df_all["lon"] = df_all["lon"].fillna(77.2)
+    # ----- Robust lat/lon resolution (replace fragile assignment) -----
+    lat_candidates = ["lat", "latitude", "customer_lat", "cust_lat", "pickup_lat", "dropoff_lat"]
+    lon_candidates = ["lon", "lng", "longitude", "customer_lon", "cust_lon", "pickup_lon", "dropoff_lon"]
+
+    # find first present candidate (or None)
+    found_lat = next((c for c in lat_candidates if c in df_raw.columns), None)
+    found_lon = next((c for c in lon_candidates if c in df_raw.columns), None)
+
+    # if neither found, try some generic numeric-looking columns (best-effort)
+    if found_lat is None or found_lon is None:
+        # quick heuristics: look for columns with float-like names or suspicious values
+        numeric_cols = df_raw.select_dtypes(include=["float","int"]).columns.tolist()
+        # try to pick two numeric columns that look like lat/lon ranges
+        if found_lat is None:
+            for c in numeric_cols:
+                vals = df_raw[c].dropna()
+                if len(vals) and (-90 <= vals.median() <= 90):
+                    found_lat = c
+                    break
+        if found_lon is None:
+            for c in numeric_cols:
+                if c == found_lat: 
+                    continue
+                vals = df_raw[c].dropna()
+                if len(vals) and (-180 <= vals.median() <= 180):
+                    found_lon = c
+                    break
+
+    # assign or fallback
+    if found_lat and found_lat in df_raw.columns:
+        df_all["lat"] = pd.to_numeric(df_raw[found_lat], errors="coerce")
+    else:
+        st.warning("⚠️ Latitude column not found in cleaned data — filling with default city coordinates.")
+        df_all["lat"] = float(28.65)  # fallback (Delhi) — change if you prefer
+
+    if found_lon and found_lon in df_raw.columns:
+        df_all["lon"] = pd.to_numeric(df_raw[found_lon], errors="coerce")
+    else:
+        st.warning("⚠️ Longitude column not found in cleaned data — filling with default city coordinates.")
+        df_all["lon"] = float(77.20)  # fallback (Delhi) — change if you prefer
+
+    # Fill missing lat/lon with defaults
+    df_all["lat"] = df_all["lat"].fillna(28.65)
+    df_all["lon"] = df_all["lon"].fillna(77.20)
+
+    # Detect swapped lat/lon (common mistake: lat looks like 70-80 and lon like 10-40)
+    lat_min, lat_max = df_all["lat"].min(), df_all["lat"].max()
+    lon_min, lon_max = df_all["lon"].min(), df_all["lon"].max()
+
+    # If lat range outside -90..90 or lon in -90..90 suspiciously, swap.
+    if (lat_min < -90 or lat_max > 90) or (abs(lat_min) > 180 or abs(lat_max) > 180):
+        # lat is invalid, try swap
+        st.warning("Detected invalid latitude range — attempting to swap lat/lon columns.")
+        df_all[["lat","lon"]] = df_all[["lon","lat"]]
+
+    # If lat values look like longitudes (e.g., > 90) but lon looks like lat (<90), swap.
+    if (df_all["lat"].abs().max() > 90) and (df_all["lon"].abs().max() <= 90):
+        st.warning("Lat/Lon appear swapped — auto-correcting.")
+        df_all[["lat","lon"]] = df_all[["lon","lat"]]
+
+    # Final numeric coercion & clipping (safe ranges)
+    df_all["lat"] = pd.to_numeric(df_all["lat"], errors="coerce").fillna(28.65).clip(-90,90)
+    df_all["lon"] = pd.to_numeric(df_all["lon"], errors="coerce").fillna(77.20).clip(-180,180)
+
+    # Save debug info to review exactly what we used
+    os.makedirs("archive", exist_ok=True)
+    debug_geo = {
+        "found_lat_column": found_lat,
+        "found_lon_column": found_lon,
+        "lat_min_max": [float(df_all["lat"].min()), float(df_all["lat"].max())],
+        "lon_min_max": [float(df_all["lon"].min()), float(df_all["lon"].max())],
+        "sample_lat_values": df_all["lat"].dropna().head(5).tolist(),
+        "sample_lon_values": df_all["lon"].dropna().head(5).tolist()
+    }
+    with open("archive/retention_geo_debug.json", "w", encoding="utf-8") as fh:
+        json.dump(debug_geo, fh, indent=2)
 
     # platform
     if col_platform in df_raw.columns:
