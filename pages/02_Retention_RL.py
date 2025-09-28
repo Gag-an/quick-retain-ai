@@ -88,8 +88,15 @@ def _safe_get_col(df, candidates, default=None):
 
 with st.spinner("Loading cleaned retention data..."):
     try:
+        # OPTIMIZATION: Better path handling for Windows
+        cleaned_path = Path("data/cleaned/")
+        if not cleaned_path.exists():
+            cleaned_path = Path("./data/cleaned/")
+        if not cleaned_path.exists():
+            cleaned_path = Path("../data/cleaned/")
+        
         # Load cleaned dataset (concat of CSVs). Use sample for performance if large.
-        df_raw = load_cleaned_dataset("data/cleaned/", sample_size=DEFAULT_SAMPLE_SIZE)
+        df_raw = load_cleaned_dataset(str(cleaned_path), sample_size=DEFAULT_SAMPLE_SIZE)
         if df_raw is None or df_raw.empty:
             raise FileNotFoundError("No cleaned CSVs found in data/cleaned/")
     except Exception as e:
@@ -357,20 +364,28 @@ if df_raw is not None:
 
     st.success(f"✅ Loaded cleaned data with {len(df_all):,} rows (mapped to retention schema)")
 else:
-    # no cleaned data — fall back to your original synthetic sample
+    # no cleaned data — fall back to synthetic sample with ALL required columns
     np.random.seed(42)
     n_samples = 1000
     df_all = pd.DataFrame({
         'customer_id': range(n_samples),
+        'user_id': range(n_samples),
+        'timestamp': pd.date_range('2023-01-01', periods=n_samples, freq='h'),
+        
+        # REQUIRED COLUMNS for prep_df
+        'basket_value': np.random.uniform(50, 1000, n_samples),  # Required
+        'discount_given': np.random.choice([0, 10, 20, 50, 100], n_samples, p=[0.6, 0.2, 0.1, 0.05, 0.05]),  # Required
+        'lat': np.random.uniform(28.0, 29.0, n_samples),  # Required (Delhi area)
+        'lon': np.random.uniform(76.0, 78.0, n_samples),  # Required (Delhi area)
+        'repeat_purchase': np.random.choice([0, 1], n_samples, p=[0.3, 0.7]),  # Required
+        
+        # Additional columns for completeness
         'days_since_last_order': np.random.randint(1, 365, n_samples),
         'total_orders': np.random.randint(1, 50, n_samples),
         'total_spent': np.random.uniform(10, 1000, n_samples),
         'avg_order_value': np.random.uniform(5, 100, n_samples),
         'retention_score': np.random.uniform(0, 1, n_samples),
-        'repeat_purchase': np.random.choice([0, 1], n_samples, p=[0.3, 0.7]),
         'platform': np.random.choice(['blinkit', 'bigbasket'], n_samples),
-        'user_id': range(n_samples),
-        'timestamp': pd.date_range('2023-01-01', periods=n_samples, freq='h'),
         'action': np.random.choice(['email', 'sms', 'push', 'discount'], n_samples),
         'reward': np.random.uniform(0, 1, n_samples)
     })
@@ -404,8 +419,15 @@ def load_retention_model():
 def run_retention_pipeline_with_cleaned_data():
     """Run retention RL pipeline with cleaned data"""
     try:
-        # Load cleaned data
-        df_raw = load_cleaned_dataset("data/cleaned/")
+        # OPTIMIZATION: Better path handling for Windows
+        cleaned_path = Path("data/cleaned/")
+        if not cleaned_path.exists():
+            cleaned_path = Path("./data/cleaned/")
+        if not cleaned_path.exists():
+            cleaned_path = Path("../data/cleaned/")
+        
+        # Load cleaned data with proper path
+        df_raw = load_cleaned_dataset(str(cleaned_path))
         st.success(f"✅ Loaded {len(df_raw):,} rows from cleaned data")
         
         # Create retention features
