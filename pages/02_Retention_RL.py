@@ -212,7 +212,39 @@ if df_raw is not None:
     }
     with open("archive/retention_loader_debug.json", "w", encoding="utf-8") as fh:
         json.dump(debug_info, fh, indent=2)
-    df_all["discount_given"] = pd.to_numeric(df_raw[col_discount], errors="coerce").fillna(0.0)
+    # === SAFELY ASSIGN discount_given, basket_value, and ensure user_id exists ===
+    # discount_given (optional)
+    if col_discount in df_raw.columns:
+        df_all["discount_given"] = pd.to_numeric(df_raw[col_discount], errors="coerce").fillna(0.0)
+    else:
+        st.warning("⚠️ No discount column found in cleaned data — defaulting to 0 for all rows.")
+        df_all["discount_given"] = 0.0
+
+    # Ensure basket_value exists (should be created earlier via col_basket logic). If not, make safe fallback:
+    if "basket_value" not in df_all.columns:
+        # try common fallbacks in df_raw
+        for alt in ["total_spent", "total_amount", "order_total", "amount"]:
+            if alt in df_raw.columns:
+                df_all["basket_value"] = pd.to_numeric(df_raw[alt], errors="coerce").fillna(0.0)
+                break
+        else:
+            st.warning("⚠️ Could not locate monetary column; created 'basket_value' with zeros as fallback.")
+            df_all["basket_value"] = 0.0
+
+    # Ensure an integer-like user_id column for grouping / selection
+    if "user_id" in df_raw.columns:
+        df_all["user_id"] = df_raw["user_id"]
+    else:
+        # create user_id from customer_id if available
+        if "customer_id" in df_all.columns:
+            df_all["user_id"] = df_all["customer_id"]
+        else:
+            df_all["user_id"] = range(len(df_all))
+
+    # Cast numeric columns to correct dtype
+    for c in ["basket_value", "discount_given", "lat", "lon"]:
+        if c in df_all.columns:
+            df_all[c] = pd.to_numeric(df_all[c], errors="coerce").fillna(0.0)
     # reward proxy: if repeat flag exists, use it; else fallback to heuristic (e.g., next-order within 30 days)
     if col_repeat in df_raw.columns:
         df_all["repeat_purchase"] = pd.to_numeric(df_raw[col_repeat], errors="coerce").fillna(0).astype(int)
@@ -486,10 +518,21 @@ with c3:
 # ---------- Prep (cached & fast) ----------
 @st.cache_data(show_spinner=False)
 def prep_df(df: pd.DataFrame, n: int):
+    # Ensure required id/timestamp columns exist, with fallbacks
+    if "user_id" not in df.columns and "customer_id" in df.columns:
+        df = df.rename(columns={"customer_id": "user_id"})
+    if "timestamp" not in df.columns and "order_timestamp" in df.columns:
+        df = df.rename(columns={"order_timestamp": "timestamp"})
+    if "timestamp" not in df.columns:
+        # create a synthetic timestamp sequence to avoid errors downstream
+        df["timestamp"] = pd.date_range("2023-01-01", periods=len(df), freq="h")
+
     df = df.sort_values(["user_id","timestamp"]).head(n).copy()
+
     need = {"discount_given","repeat_purchase","basket_value","lat","lon"}
-    if not need.issubset(df.columns):
-        raise ValueError(f"Missing columns: {sorted(list(need - set(df.columns)))}")
+    missing = sorted(list(need - set(df.columns)))
+    if missing:
+        raise ValueError(f"Missing columns required by prep_df: {missing}")
 
     df["recency_days"] = (df.groupby("user_id")["timestamp"].diff().dt.days).fillna(999).clip(0,365)
     df["orders_so_far"] = df.groupby("user_id").cumcount()
@@ -630,8 +673,9 @@ st.dataframe(summary, width="stretch")
 # ---------- Offer Decision Tool (lazy) ----------
 with st.expander("🎯 Offer Decision (per customer/context)"):
     st.caption("Trains counterfactual RFs on demand; lets you compare reward with/without a specific coupon.")
+
     @st.cache_data(show_spinner=False)
-    def fit_cf_models(df_in: pd.DataFrame, features: list[str]):
+    def fit_cf_models(df_in: pd.DataFrame, features: list):
         rf0, rf1 = RandomForestRegressor(300, random_state=42), RandomForestRegressor(300, random_state=42)
         mask0, mask1 = df_in["action"].eq(0), df_in["action"].eq(1)
         X0, y0 = (df_in.loc[mask0, features], df_in.loc[mask0, "reward"])
@@ -641,25 +685,54 @@ with st.expander("🎯 Offer Decision (per customer/context)"):
         rf0.fit(X0, y0); rf1.fit(X1, y1)
         return rf0, rf1
 
-    rf0, rf1 = fit_cf_models(df, FEATURES)
+    # Use FEATURES returned by prep_df (ensure it's defined)
+    try:
+        rf0, rf1 = fit_cf_models(df, FEATURES)
+    except Exception as e:
+        st.warning(f"Could not fit counterfactual models: {e}")
+        rf0 = rf1 = None
 
     mode = st.radio("Pick context from", ["Dataset row", "Manual input"], horizontal=True)
+
+    def _row_to_feature_vector(row, features):
+        """Accept pd.Series or dict-like row and return feature vector aligned to features list."""
+        # convert to Series
+        if isinstance(row, pd.Series):
+            s = row
+        else:
+            s = pd.Series(row)
+        # ensure all features present
+        vec = {f: float(s.get(f, 0.0)) for f in features}
+        return pd.Series(vec)
+
     def decision_from_row(row: pd.Series):
         offer_rupees = st.number_input("Offer amount (₹)", 0, 500, 100, 10, key="offer_amt_rl")
-        base = row[FEATURES].copy()
-        x0 = base.copy(); x0["discount_given"] = 0
-        x1 = base.copy(); x1["discount_given"] = offer_rupees
-        r0 = float(rf0.predict(pd.DataFrame([x0]))[0])
-        r1 = float(rf1.predict(pd.DataFrame([x1]))[0])
+        base = _row_to_feature_vector(row, FEATURES)
+        x0 = base.copy(); x0["discount_given"] = 0.0
+        x1 = base.copy(); x1["discount_given"] = float(offer_rupees)
+        # wrap into DataFrame for predictor
+        X0_df, X1_df = pd.DataFrame([x0]), pd.DataFrame([x1])
+        if rf0 is None or rf1 is None:
+            st.warning("Counterfactual models not available; returning zeros.")
+            return 0.0, 0.0, 0.0, offer_rupees
+        r0 = float(rf0.predict(X0_df)[0])
+        r1 = float(rf1.predict(X1_df)[0])
         return r0, r1, r1 - r0, offer_rupees
 
     if mode == "Dataset row":
-        uids = df["user_id"].unique().tolist()
-        sel_user = st.selectbox("User ID", uids)
-        row = df[df["user_id"] == sel_user].iloc[[-1]].squeeze()
-        r0, r1, delta, offer_amt = decision_from_row(row)
-        st.dataframe(pd.DataFrame(row).T[["timestamp","basket_value","discount_given","recency_days","orders_so_far","hour","dow","lat","lon","platform"]])
+        # ensure df exists and user_id is present
+        if "user_id" not in df.columns:
+            st.warning("user_id not found in prepared dataset.")
+        else:
+            uids = df["user_id"].unique().tolist()
+            sel_user = st.selectbox("User ID", uids)
+            row = df[df["user_id"] == sel_user].iloc[[-1]].squeeze()
+            r0, r1, delta, offer_amt = decision_from_row(row)
+            # display selected row safely only for columns present
+            display_cols = [c for c in ["timestamp","basket_value","discount_given","recency_days","orders_so_far","hour","dow","lat","lon","platform"] if c in df.columns]
+            st.dataframe(pd.DataFrame(row).T[display_cols])
     else:
+        # Manual input
         c1, c2, c3 = st.columns(3)
         with c1:
             basket_value = st.number_input("Basket value (₹)", 50.0, 5000.0, 600.0, 10.0)
@@ -672,10 +745,9 @@ with st.expander("🎯 Offer Decision (per customer/context)"):
         with c3:
             lon = st.number_input("Longitude", 70.0, 90.0, 77.20, 0.001)
             current_disc = st.number_input("Current discount (₹)", 0, 500, 0, 10)
-        row = pd.Series(dict(basket_value=basket_value, discount_given=current_disc,
-                             recency_days=recency_days, orders_so_far=orders_so_far,
-                             hour=hour, dow=dow, lat=lat, lon=lon))
-        r0, r1, delta, offer_amt = decision_from_row(row)
+        manual_row = dict(basket_value=basket_value, discount_given=current_disc, recency_days=recency_days,
+                          orders_so_far=orders_so_far, hour=hour, dow=dow, lat=lat, lon=lon)
+        r0, r1, delta, offer_amt = decision_from_row(manual_row)
 
     st.markdown("#### ✅ Recommendation")
     policy = "Offer coupon" if delta > 0 else "Do NOT offer"
