@@ -1,0 +1,39 @@
+# Large data files that exceed GitHub's 100MB limit
+data/cleaned/blinkit_inventory.csv
+data/cleaned/BigBasket Products.csv
+data/raw/blinkit_inventory.csv
+data/raw/BigBasket Products.csv
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Large model files (optional - uncomment if you want to exclude them)
+# *.pkl
+# models/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp

@@ -1,0 +1,8 @@
+{
+  "timestamp": "2025-09-28 15:22:01",
+  "datasets_loaded": 22,
+  "models_trained": 3,
+  "results": {
+    "churn": {
+      "auc_score": 1.0,
+      "test_predictions": 

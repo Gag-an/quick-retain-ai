@@ -1,0 +1,9 @@
+[
+  "customer_id",
+  "timestamp",
+  "action",
+  "reward",
+  "repeat_purchase",
+  "platform",
+  "user_id"
+]

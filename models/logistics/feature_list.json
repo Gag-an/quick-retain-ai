@@ -1,0 +1,10 @@
+[
+  "order_id",
+  "customer_id",
+  "pickup_lat",
+  "pickup_lng",
+  "dropoff_lat",
+  "dropoff_lng",
+  "order_timestamp",
+  "distance_km"
+]

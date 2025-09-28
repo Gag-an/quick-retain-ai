@@ -1,0 +1,8 @@
+[
+  "customer_id",
+  "total_orders",
+  "total_spent",
+  "days_since_last_order",
+  "avg_order_value",
+  "churn"
+]

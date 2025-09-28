@@ -1,0 +1,79 @@
+{
+  "timestamp": "2025-09-28T16:58:25.373247",
+  "git_commit": "unknown",
+  "cli_args": {
+    "data_dir": "data/cleaned/",
+    "out_dir": "models/churn/",
+    "label_col": null,
+    "churn_days": 90,
+    "use_smote": false,
+    "model": "xgboost",
+    "max_rows": 5000
+  },
+  "data_info": {
+    "total_rows": 5000,
+    "feature_count": 207,
+    "numeric_features": 60,
+    "categorical_features": 50
+  },
+  "target_info": {
+    "churn_rate": 0.2052,
+    "class_balance": {
+      "0": 3974,
+      "1": 1026
+    }
+  },
+  "cv_scores": {
+    "auc": {
+      "mean": 0.490896865870039,
+      "std": 0.016190798877206296,
+      "scores": [
+        0.466700414173953,
+        0.4980058291148949,
+        0.4816413560362019,
+        0.5150697959809787,
+        0.49306693404416624
+      ]
+    },
+    "f1": {
+      "mean": 0.009497406576595225,
+      "std": 0.00605277431156491,
+      "scores": [
+        0.009345794392523364,
+        0.019138755980861243,
+        0.009478672985781991,
+        0.0,
+        0.009523809523809525
+      ]
+    },
+    "precision": {
+      "mean": 0.20555555555555555,
+      "std": 0.16814162167135063,
+      "scores": [
+        0.1111111111111111,
+        0.5,
+        0.16666666666666666,
+        0.0,
+        0.25
+      ]
+    },
+    "recall": {
+      "mean": 0.0048733128107980115,
+      "std": 0.003085163476959209,
+      "scores": [
+        0.004878048780487805,
+        0.00975609756097561,
+        0.004878048780487805,
+        0.0,
+        0.0048543689320388345
+      ]
+    }
+  },
+  "artifacts": {
+    "churn_model.pkl": "Full pipeline with preprocessor and classifier",
+    "preprocessor.pkl": "Fitted preprocessor for feature transformation",
+    "feature_list.json": "Ordered list of feature names after transformation",
+    "shap_explainer.pkl": "SHAP explainer for model interpretation",
+    "training_report.json": "This training report"
+  }
+}
